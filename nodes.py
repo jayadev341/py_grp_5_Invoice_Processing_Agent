@@ -8,7 +8,7 @@ import base64
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_chroma import Chroma
-from docling.document_converter import DocumentConverter, PdfFormatOption, ImageFormatOption
+from docling.document_converter import DocumentConverter, PdfFormatOption, ImageFormatOption, WordFormatOption
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions, EasyOcrOptions
 from langchain_docling import DoclingLoader
@@ -25,18 +25,18 @@ shared_pipeline_options = PdfPipelineOptions()
 shared_pipeline_options.do_ocr = True
 shared_pipeline_options.ocr_options = EasyOcrOptions(lang=["en"], use_gpu=False)
 
+# FIX: Map each format strictly to its correct native Option class
 ocr_converter = DocumentConverter(
     format_options={
         InputFormat.PDF: PdfFormatOption(pipeline_options=shared_pipeline_options),
-        InputFormat.IMAGE: PdfFormatOption(pipeline_options=shared_pipeline_options)
+        InputFormat.IMAGE: ImageFormatOption(pipeline_options=shared_pipeline_options),
+        InputFormat.DOCX: WordFormatOption() 
     }
 )
 
-PAID_INVOICES_REGISTRY = {"INV-OLD-999"} 
+PAID_INVOICES_REGISTRY = {"INV-OLD-999"}
 
-# Helper function for Multimodal Vision encoding
 def encode_image(image_path: str) -> str:
-    """Encodes a local image file into a base64 string for multimodal LLM consumption."""
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode("utf-8")
 
@@ -45,7 +45,7 @@ def encode_image(image_path: str) -> str:
 # =====================================================================
 
 def extract_node(state: AgentState) -> dict:
-    """Ingests the document file layout, executing hybrid parsing (Vision for images, Docling for PDFs)."""
+    """Ingests the document file layout, executing hybrid parsing (Vision for images, Docling for PDFs/DOCX)."""
     file_path = state["file_path"]
     file_format = state["file_format"].lower()
     logs = state.get("audit_log", []).copy()
@@ -58,13 +58,12 @@ def extract_node(state: AgentState) -> dict:
     )
 
     # ---------------------------------------------------------
-    # PATHWAY A: MULTIMODAL VISION FOR IMAGES (Hyper-Focused Prompt)
+    # PATHWAY A: MULTIMODAL VISION FOR IMAGES
     # ---------------------------------------------------------
     if file_format in ["png", "jpg", "jpeg"]:
         logs.append(f"[extract] Image format detected ({file_format}). Activating Multimodal Vision track...")
         base64_image = encode_image(file_path)
         
-        # Explicit target breakdown to force model focus on the PO layout line
         vision_instruction = (
             "Examine the invoice image line-by-line and extract the following attributes:\n"
             "- invoice_id\n"
@@ -91,10 +90,12 @@ def extract_node(state: AgentState) -> dict:
         logs.append(f"[extract] Visual extraction complete for Invoice ID: {structured_result.invoice_id}")
 
     # ---------------------------------------------------------
-    # PATHWAY B: STRUCTURAL DOCLING PARSING FOR PDFs
+    # PATHWAY B: NATIVE STRUCTURAL DOCLING PARSING FOR PDFs & DOCX
     # ---------------------------------------------------------
     else:
-        logs.append(f"[extract] PDF format detected. Invoking Docling structural parsing layout...")
+        doc_label = "Microsoft Word (DOCX)" if file_format == "docx" else "PDF Document"
+        logs.append(f"[extract] {doc_label} layout detected. Invoking structural parsing engine...")
+        
         loader = DoclingLoader(
             file_path=file_path,
             converter=ocr_converter,
@@ -104,9 +105,23 @@ def extract_node(state: AgentState) -> dict:
         raw_markdown = docs[0].page_content if docs else ""
         logs.append(f"[extract] Generated Markdown string ({len(raw_markdown)} characters)")
         
+        # CRUCIAL FIX: Inject an explicit field checklist to prevent Markdown structural blindness
+        text_instruction = (
+            f"Examine the following extracted invoice text layout and isolate the target fields:\n\n"
+            f"Attributes to target and isolate:\n"
+            f"- invoice_id\n"
+            f"- vendor_name\n"
+            f"- po_number (Look carefully for text like 'PO Number', 'PO Reference', or 'PO-XXX' strings and extract the exact ID token)\n"
+            f"- invoice_total\n"
+            f"- line_items (quantity, unit_price, total_price, item_description)\n\n"
+            f"Ensure the 'po_number' field is accurately captured as its string token value. "
+            f"If no PO reference is explicitly written anywhere in the text layout, return null.\n\n"
+            f"Invoice Text Content:\n{raw_markdown}"
+        )
+        
         structured_result = llm.invoke([
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Invoice Document:\n\n{raw_markdown}"}
+            {"role": "user", "content": text_instruction}
         ])
         logs.append(f"[extract] Text extraction complete for Invoice ID: {structured_result.invoice_id}")
 
@@ -178,7 +193,7 @@ def match_po_node(state: AgentState) -> dict:
     
     
 def validate_node(state: AgentState) -> dict:
-    """Performs full 3-way validation triangle verification with explicit identity compliance tracking."""
+    """Performs full 3-way validation triangle verification with strict header total safeguards."""
     logs = state.get("audit_log", []).copy()
     invoice = state.get("extracted_invoice")
     po_context = state.get("matched_po_context")
@@ -189,50 +204,61 @@ def validate_node(state: AgentState) -> dict:
     logs.append("[validate] Running comprehensive compliance guardrails...")
 
     invoice_id = invoice.get("invoice_id")
-    invoice_total = invoice.get("invoice_total", 0.0)
-    po_number = invoice.get("po_number")
+    invoice_total = float(invoice.get("invoice_total", 0.0))
 
     if invoice_id in PAID_INVOICES_REGISTRY:
         is_duplicate = True
         errors.append(f"Security Alert: Duplicate Invoice ID detected. '{invoice_id}' has already been processed.")
         return {"validation_errors": errors, "is_duplicate": True, "routing_decision": "Exception", "audit_log": logs}
 
-    # ---------------------------------------------------------
-    # LEG A: Context Existence Verification (Catches Unknown Documents)
-    # ---------------------------------------------------------
     if not po_context or "NOT_FOUND" in state.get("matched_po_id", ""):
-        errors.append(f"Compliance Violation: Stated Purchase Order reference '{po_number}' does not exist in the corporate index.")
+        errors.append("Compliance Violation: Stated Purchase Order reference does not exist in the corporate index.")
     if not grn_context:
-        errors.append("Compliance Violation: No corresponding warehouse fulfillment record (GRN) exists for this order sequence.")
+        errors.append("Compliance Violation: No corresponding warehouse fulfillment record (GRN) exists.")
         
     if errors:
-        logs.append(f"[validate] Reference validation check failed: {errors}")
         return {"validation_errors": errors, "routing_decision": "Exception", "audit_log": logs}
 
     # ---------------------------------------------------------
-    # LEG B: Explicit Document Content String Crosstracking
+    # LEG A: Parse Contract Limits & Total Contracted Value
     # ---------------------------------------------------------
-    po_qty, po_price = 0.0, 0.0
-    db_po_id = None
+    po_qty, po_price, po_total_authorized = 0.0, 0.0, 0.0
     for line in po_context.split("\n"):
-        if "PO Number" in line: db_po_id = line.split(":")[-1].strip().replace("**", "")
         if "Authorized Quantity" in line: po_qty = float(line.split(":")[-1].strip())
         if "Contracted Unit Price" in line: po_price = float(line.split(":")[-1].strip())
-
-    # Secondary validation safeguard to confirm the correct matching ID file was parsed
-    if po_number and db_po_id and po_number != db_po_id:
-        errors.append(f"Security Tampering Alert: Document routing conflict. Invoice references {po_number} but matched {db_po_id}.")
-        return {"validation_errors": errors, "routing_decision": "Exception", "audit_log": logs}
+        if "Total Authorized Amount" in line: po_total_authorized = float(line.split(":")[-1].strip())
 
     grn_qty = 0.0
     for line in grn_context.split("\n"):
         if "Verified Quantity Received" in line: grn_qty = float(line.split(":")[-1].strip())
 
     # ---------------------------------------------------------
+    # LEG B: Internal Arithmetic Totals Validation 
+    # ---------------------------------------------------------
+    calculated_line_sum = 0.0
+    for item in invoice.get("line_items", []):
+        qty = float(item.get("quantity", 0.0))
+        price = float(item.get("unit_price", 0.0))
+        stated_amount = float(item.get("total_price", 0.0))
+        
+        line_item_math = qty * price
+        if abs(line_item_math - stated_amount) > 0.01:
+            errors.append(f"Arithmetic Error: Line item '{item.get('item_description')}' total is ${stated_amount} but math computes to ${line_item_math}.")
+        calculated_line_sum += stated_amount
+
+    # CRUCIALSafeguard 1: Block Header vs Line Item Deviations
+    if abs(invoice_total - calculated_line_sum) > 0.01:
+        errors.append(f"Header Fraud Discrepancy: Invoice Stated Total (${invoice_total}) does not match the sum of its itemized lines (${calculated_line_sum}).")
+
+    # CRUCIAL Safeguard 2: Block Header vs PO Authorized Value Leakage
+    if abs(invoice_total - po_total_authorized) > 0.01:
+        errors.append(f"Financial Variance Exception: Invoice Stated Total (${invoice_total}) exceeds the total contract value authorized on PO (${po_total_authorized}).")
+
+    # ---------------------------------------------------------
     # LEG C: Standard Quantitative 3-Way Triad Evaluations
     # ---------------------------------------------------------
-    invoice_qty = sum(item.get("quantity", 0.0) for item in invoice.get("line_items", []))
-    invoice_max_price = max(item.get("unit_price", 0.0) for item in invoice.get("line_items", [])) if invoice.get("line_items") else 0.0
+    invoice_qty = sum(float(item.get("quantity", 0.0)) for item in invoice.get("line_items", []))
+    invoice_max_price = max(float(item.get("unit_price", 0.0)) for item in invoice.get("line_items", [])) if invoice.get("line_items") else 0.0
 
     if invoice_qty > po_qty:
         errors.append(f"Quantity Mismatch: Invoice Qty {invoice_qty} exceeds PO authorized Qty {po_qty}.")
@@ -241,11 +267,9 @@ def validate_node(state: AgentState) -> dict:
     if invoice_qty > grn_qty:
         errors.append(f"Quantity Mismatch: Invoice Qty {invoice_qty} exceeds Warehouse GRN received Qty {grn_qty}.")
 
-    if grn_qty > po_qty:
-        errors.append(f"Warehouse Leak Exception: Warehouse received Qty {grn_qty}, which violates PO authorized Qty {po_qty}.")
-    elif grn_qty < po_qty:
-        logs.append(f"[validate] Note: Short shipment detected. Warehouse received {grn_qty}/{po_qty} authorized units.")
-
+    # ---------------------------------------------------------
+    # DETERMINISTIC STATE TRANSITION ROUTING
+    # ---------------------------------------------------------
     if errors:
         routing_decision = "Exception"
     elif invoice_total > 50000.0:
