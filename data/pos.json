@@ -1,0 +1,51 @@
+{
+    "PO-101": {
+        "vendor": "Nexus Tech",
+        "item": "Cloud Licenses",
+        "qty": 10,
+        "unit_price": 500.0,
+        "total": 5000.0
+    },
+    "PO-102": {
+        "vendor": "Apex Office",
+        "item": "Ergonomic Chairs",
+        "qty": 5,
+        "unit_price": 300.0,
+        "total": 1500.0
+    },
+    "PO-103": {
+        "vendor": "Pixel Corp",
+        "item": "4K Monitors",
+        "qty": 2,
+        "unit_price": 400.0,
+        "total": 800.0
+    },
+    "PO-104": {
+        "vendor": "Nexus Tech",
+        "item": "Laptops",
+        "qty": 10,
+        "unit_price": 1000.0,
+        "total": 10000.0
+    },
+    "PO-105": {
+        "vendor": "LogiSupply",
+        "item": "Webcams",
+        "qty": 20,
+        "unit_price": 120.0,
+        "total": 2400.0
+    },
+    "PO-106": {
+        "vendor": "Apex Office",
+        "item": "Desk Lamps",
+        "qty": 10,
+        "unit_price": 50.0,
+        "total": 500.0
+    },
+    "PO-110": {
+        "vendor": "Enterprise Core",
+        "item": "Server Rack",
+        "qty": 1,
+        "unit_price": 75000.0,
+        "total": 75000.0
+    }
+}

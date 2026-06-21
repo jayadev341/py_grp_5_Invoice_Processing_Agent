@@ -1,0 +1,37 @@
+{
+    "GRN-101": {
+        "po_number": "PO-101",
+        "item": "Cloud Licenses",
+        "qty_received": 10
+    },
+    "GRN-102": {
+        "po_number": "PO-102",
+        "item": "Ergonomic Chairs",
+        "qty_received": 5
+    },
+    "GRN-103": {
+        "po_number": "PO-103",
+        "item": "4K Monitors",
+        "qty_received": 2
+    },
+    "GRN-104": {
+        "po_number": "PO-104",
+        "item": "Laptops",
+        "qty_received": 10
+    },
+    "GRN-105": {
+        "po_number": "PO-105",
+        "item": "Webcams",
+        "qty_received": 20
+    },
+    "GRN-106": {
+        "po_number": "PO-106",
+        "item": "Desk Lamps",
+        "qty_received": 10
+    },
+    "GRN-110": {
+        "po_number": "PO-110",
+        "item": "Server Rack",
+        "qty_received": 1
+    }
+}

@@ -1,0 +1,16 @@
+langchain
+langgraph
+langchain_community
+langchain-openai
+langchain_chroma
+langchain_docling
+chromadb
+pandas
+numpy
+docling
+easyocr
+streamlit
+pydantic
+python_dotenv
+reportlab
+docx
